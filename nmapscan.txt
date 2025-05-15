@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# all_scans_debug.sh — run every major nmap scan type at speeds T0–T5,
+# with per-scan debugging and error capture.
+# Usage: sudo ./all_scans_debug.sh 10.0.0.5 1-1024
+
+set -uo pipefail
+
+#–– Prerequisites check ––
+
+if ! command -v nmap &>/dev/null; then
+  echo "ERROR: nmap is not installed or not in your PATH."
+  exit 1
+fi
+
+if [[ $EUID -ne 0 ]]; then
+  echo "WARNING: You are not root. Some scan types (SYN/UDP/Idle) may fail or downgrade."
+fi
+
+if [[ $# -lt 1 ]]; then
+  echo "Usage: $0 <target> [ports (default: 1-65535)]"
+  exit 1
+fi
+
+TARGET="$1"
+PORTS="${2:-1-65535}"
+LOGDIR="scan_logs_debug"
+mkdir -p "$LOGDIR"
+
+declare -A SCANS=(
+  ["TCP_Connect"]="-sT"
+  ["TCP_SYN"]="-sS"
+  ["TCP_ACK"]="-sA"
+  ["TCP_Window"]="-sW"
+  ["TCP_Maimon"]="-sM"
+  ["TCP_FIN"]="-sF"
+  ["TCP_NULL"]="-sN"
+  ["TCP_Xmas"]="-sX"
+  ["UDP"]="-sU"
+  ["SCTP_INIT"]="-sY"
+  ["SCTP_COOKIE_ECHO"]="-sZ"
+  ["IP_Protocol"]="-sO"
+)
+
+TIMINGS=(1 2 3 4 5)
+
+echo "→ Starting scans against $TARGET (ports: $PORTS) at speeds T1–T5"
+echo "   Detailed logs will go into ./$LOGDIR/"
+
+#–– Allow failures and keep going ––
+set +e
+
+for timing in "${TIMINGS[@]}"; do
+  for name in "${!SCANS[@]}"; do
+    flags=${SCANS[$name]}
+    logfile="${LOGDIR}/${TARGET//./_}_${name}_T${timing}.log"
+    echo -e "\n[+] ${name} at -T${timing} → ${logfile}"
+    # -v for verbose; redirect both stdout & stderr
+    nmap $flags -T${timing} -v -p "$PORTS" "$TARGET" \
+      >"$logfile" 2>&1
+    echo "    → exit code: $?"
+  done
+done
+
+#–– Idle scan (needs ZOMBIE) ––
+if [[ -n "${ZOMBIE-}" ]]; then
+  for timing in "${TIMINGS[@]}"; do
+    logfile="${LOGDIR}/${TARGET//./_}_Idle_T${timing}.log"
+    echo -e "\n[+] Idle scan (zombie: $ZOMBIE) at -T${timing} → ${logfile}"
+    nmap -sI "$ZOMBIE" -T${timing} -v -p "$PORTS" "$TARGET" \
+      >"$logfile" 2>&1
+    echo "    → exit code: $?"
+  done
+else
+  echo -e "\n[!] ZOMBIE not set; skipping Idle scans."
+  echo "    To include Idle scans: export ZOMBIE=<zombie‑ip> and re-run."
+fi
+
+echo -e "\n✔ Done. Check ./${LOGDIR}/ for all logs."
